@@ -64,25 +64,59 @@
   # Exiting @ tick 1056500 because exiting with last active thread context
   ```
 
-### 记录PC
-* gem5自带的`DPRINTF`功能可以输出所需
+### 输出动态指令流信息
+* gem5自带的`DPRINTF`功能可以输出系统中各个组件（包括流水线、内存系统等）的动态信息，`DPRINTF`默认是关闭的，需使用`--debug-flags`开启
+* 例如，下面开启程序的动态PC流输出，写到`m5out/debug.log.gz`文件中
+  <b>注：</b>`--debug-file`的路径含有一个隐式前缀`m5out/`
   ```bash
   build/RISCV/gem5.opt \
     --debug-flags=ExecEnable,ExecUser,ExecKernel \
-    --debug-file=debug.out.gz \
+    --debug-file=debug.log.gz \
     configs/example/se.py \
-    --cmd=riscv-fs/hello
+    --cmd=hello
+  ```
+* 为了节约磁盘空间，我们使用压缩格式记录输出，可以使用如下命令查看前10行输出
+  ```bash
+  $ gzip -dc m5out/debug.log.gz | head -10
+  #  500: system.cpu: 0x10116    : auipc gp, 4                :
+  # 1500: system.cpu: 0x1011a    : addi gp, gp, -638          :
+  # 2500: system.cpu: 0x1011e    : addi a0, gp, 1912          :
+  # 3500: system.cpu: 0x10122    : auipc a2, 4                :
+  # 4500: system.cpu: 0x10126    : addi a2, a2, 1398          :
+  # ...
+  ```
+* 更多的`--debug-flag`可以用下面的命令查看
+  ```bash
+  $ build/RISCV/gem5.opt --debug-help
+  # ...
+  # Compound Flags:
+  #     AnnotateAll: All Annotation flags
+  #         Annotate, AnnotateQ, AnnotateVerbose
+  #     CacheAll:
+  #         Cache, CacheComp, CachePort, CacheRepl, CacheVerbose,
+  #         HWPrefetch, MSHR
+  #　...
   ```
 
-### 测试Gshare
-```bash
-time build/RISCV/gem5.opt configs/example/se.py \
-  --cpu-type=O3CPU --bp-type=GshareBP --caches \
-  --param='system.cpu[0].branchPred.localPredictorSize=65536' \
-  --cmd=../coremark/coremark-rv64-static
-
-grep 'cpu.branchPred.cond' m5out/stats.txt
-```
+### 输出性能计数器
+* 若我们并不关心每条动态指令，只是想知道整个程序最终的运行情况，可以用gem5的性能计数器功能
+* gem5的性能计数器默认是开启的，例如运行下面的命令
+  ```bash
+  build/RISCV/gem5.opt configs/example/se.py \
+    --cpu-type=O3CPU \
+    --bp-type=TAGE_SC_L_64KB \
+    --caches --l2cache \
+    --cmd=hello
+  ```
+* 就可以在`m5out/stats.txt`中看到整个程序最终的性能计数器的值
+  ```bash
+  $ cat m5out/stats.txt
+  # ...
+  # system.cpu.numCycles       13156  # Number of cpu cycles simulated (Cycle)
+  # system.cpu.committedInsts   1760  # Number of Instructions Simulated (Count)
+  # system.cpu.instsIssued      2665  # Number of instructions issued (Count)
+  # ...
+  ```
 
 ## FS模式：启动Linux
 
