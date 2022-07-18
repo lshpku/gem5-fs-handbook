@@ -137,7 +137,14 @@
   ```bash
   $ gzip -cd riscv-disk.img.gz > riscv-disk.img
   ```
-* 假设你将`bootloader-vmlinux-5.10`和`riscv-disk.img`放在和`gem5/`同一级目录下
+* 假设你将`bootloader-vmlinux-5.10`和`riscv-disk.img`放在和`gem5/`同一级目录下，如下所示
+  ```bash
+  $ ls
+  # gem5/
+  # gem5-fs-handbook/
+  # bootloader-vmlinux-5.10
+  # riscv-disk.img
+  ```
 
 ### 修改磁盘镜像
 #### 如果你有sudo权限（Podman里的不算）
@@ -219,69 +226,74 @@
 在上一节中我们只是能够启动操作系统，但还不能做任何有价值的实验，本节将介绍如何使用FS模式运行我们的benchmark，并且高效地完成整个实验流程
 
 ### 编译m5
-* `m5`是一个在FS容器中操作gem5的命令行小程序，`m5`的原理是执行自定义的指令并被gem5捕获，使得gem5执行一些外部动作，关于`m5`的更多介绍可见 [m5 README](https://github.com/gem5/gem5/tree/stable/util/m5)
+* `m5`是一个在FS容器中操作gem5的命令行小程序，`m5`的原理是执行自定义的指令并被gem5捕获，使得gem5执行一些外部动作，关于`m5`的更多介绍可见[m5 README](https://github.com/gem5/gem5/tree/stable/util/m5)
 * 使用如下命令编译`m5`
   ```bash
   $ cd gem5/util/m5
   $ python3 `which scons` build/RISCV/out/m5
   ```
+* 参照[修改磁盘镜像](#修改磁盘镜像)，将编译好的`m5`（位于`gem5/util/m5/build/riscv/out/m5`）拷贝到你的镜像的`/root`目录下
+
+### 修改登录脚本
+* 由于默认的镜像需要输入密码登录，且登录后不会自动运行程序，所以我们需要修改登录脚本，让它自动登录和运行benchmark
+#### 关于修改方式
+* 如果你有root权限，可以`mount`镜像后直接用`vim`修改
+* 如果没有root权限，可以先用`e2cp -p`命令将文件复制出来，修改后再复制回去
+  * <b>警告：</b>使用`e2cp -p`命令时绝对不能漏掉`-p`参数！
+#### 设置免登录
+* Linux使用`/etc/inittab`设置启动第一个进程（`/sbin/init`）后应该做的事情
+* 修改`/etc/inittab`，将`::respawn:/sbin/getty ...`这一行修改为
+  ```text
+  ::respawn:-/bin/sh /root/init.sh
+  ```
+* 上述命令其实是说启动之后直接运行`/root/init.sh`脚本，不经过`getty`，也就是不需要登录
+#### 设置运行脚本
+* 在镜像中创建`/root/init.sh`文件，内容如下
+  ```bash
+  /root/m5 checkpoint
+  /root/m5 readfile > /tmp/run.sh
+  /bin/sh /tmp/run.sh
+  /root/m5 exit
+  ```
+* 这个脚本写得非常巧妙，其中`/root/m5 checkpoint`这句类似于`fork()`，请读者自己体会
+
+### 准备Benchmark
+* 假设我们仍然用`hello`小程序，你已经将`hello`已经放在镜像的`/root`目录下
+* 在**镜像外**创建一个调用`hello`的脚本`run-hello.sh`，内容如下
+  ```bash
+  /root/m5 resetstats
+  /root/hello > /tmp/hello.out
+  /root/m5 dumpstats
+  ```
+* <b>警告：</b>gem5的磁盘镜像是只读的，所以如果你的benchmark需要写，请将写的内容重定向到镜像的`/tmp`文件夹中
 
 ### 使用Atomic启动Linux
-```bash
-build/RISCV/gem5.opt configs/example/riscv/fs_linux.py \
-  --kernel=riscv-fs/bootloader-vmlinux-5.10 \
-  --disk-image=riscv-fs/riscv-disk.img
-```
-* 系统启动后会自动保存镜像然后退出，下次从保存镜像命令结束的地方开始执行
-* 镜像保存位置为`m5out/cpt.<tick_num>/`，`<tick_num>`为退出时的时钟数
-
-### 使用O3CPU运行Benchmark
-```bash
-time build/RISCV/gem5.opt \
-  --debug-flags=ExecEnable,ExecUser,ExecKernel \
-  --debug-file=debug.out.gz \
-  configs/example/riscv/fs_linux.py \
-  --kernel=riscv-fs/bootloader-vmlinux-5.10 \
-  --disk-image=riscv-fs/riscv-disk.img \
-  -r 1 -I 10000000 --script=riscv-fs/workload.sh
-```
-* `--debug-file`：实际存储位置为`m5out/debug.out.gz`
-* `-r`：恢复checkpoint的版本，如果对gem5的checkpoint机制不了解，请只保留一份镜像，这里填`1`
-* `-I`：最大执行指令的数量
-* `--script`：需要执行的脚本，注意只能使用`sh`语法，默认工作目录为`/`
-
-### 恢复Checkpoint并执行
-* Gshare
+* 为了避免每次运行程序都要启动一次系统，我们可以制作一个已经启动好的系统的镜像，以后每次都从创建镜像的地方开始运行benchmark即可
+* 由于上一步我们已经在登录脚本中设置了checkpoint命令，所以直接启动系统即可，启动完成后会自动保存镜像并退出
   ```bash
-  time build/RISCV/gem5.opt \
+  build/RISCV/gem5.opt configs/example/riscv/fs_linux.py \
+    --kernel=riscv-fs/bootloader-vmlinux-5.10 \
+    --disk-image=riscv-fs/riscv-disk.img
+  ```
+* 生成的镜像位于`m5out/cpt.xxx/`（整个文件夹都是），其中`xxx`是创建checkpoint时的tick数
+* <b>注：</b>gem5不是用文件夹名称而是tick数的大小顺序来识别checkpoint的，tick数最小的为1号checkpoint，次小的为2号，以此类推，所以建议不要修改文件夹的名字
+
+### 使用O3CPU恢复Checkpoint
+* 恢复1号checkpoint（假设你的`m5out/`下只有一个checkpoint），注意设置`--script`为我们刚才准备的`run-hello.sh`脚本
+  ```bash
+  build/RISCV/gem5.opt \
     configs/example/riscv/fs_linux.py \
     --kernel=riscv-fs/bootloader-vmlinux-5.10 \
     --disk-image=riscv-fs/riscv-disk.img \
     --restore-with-cpu=O3CPU \
-    --bp-type=GshareBP --caches \
-    --param='system.switch_cpus[0].branchPred.localPredictorSize=16384' \
-    --param='system.switch_cpus[0].branchPred.instShiftAmt=1' \
-    -r 1 -I 100000000 --script=riscv-fs/workload.sh
+    --bp-type=TAGE_SC_L_64KB \
+    --caches --l2cache \
+    --checkpoint-restore=1 \
+    --script=run-hello.sh
   ```
-* 查看结果
+* 运行完毕后，查看性能计数器的值，可以看到同一项出现了两次，因为`run-hello.sh`脚本自己调用了一次`dumpstats`，gem5运行结束时又自动记录了一次；第二次其实是多余的，应该以第一次为准
   ```bash
-  grep 'switch_cpus.branchPred.cond' m5out/stats.txt
-  ```
-
-## 其他
-
-### 编译CoreMark
-* 不限制ISA
-  ```bash
-  riscv64-unknown-linux-gnu-gcc -O2 -lrt -static -Ilinux -Isimple -I. \
-    -DFLAGS_STR=\""-O2 -lrt -static"\" -DITERATIONS=10 \
-    core_list_join.c core_main.c core_matrix.c core_state.c core_util.c \
-    simple/core_portme.c -o coremark-rv64
-  ```
-* 禁用RVC
-  ```bash
-  riscv64-unknown-linux-gnu-gcc -O2 -lrt -static -Ilinux -Isimple -I. -march=rv64g \
-    -DFLAGS_STR=\""-O2 -lrt -static"\" -DITERATIONS=10 \
-    core_list_join.c core_main.c core_matrix.c core_state.c core_util.c \
-    simple/core_portme.c -o coremark-rv64-norvc
+  $ grep -r system.switch_cpus.branchPred.lookups m5out/stats.txt
+  # system.switch_cpus.branchPred.lookups  191847  # Number of BP lookups (Count)
+  # system.switch_cpus.branchPred.lookups  336559  # Number of BP lookups (Count)
   ```
