@@ -69,7 +69,7 @@
 * 例如，下面开启程序的动态PC流输出，写到`m5out/debug.log.gz`文件中
   <b>注：</b>`--debug-file`的路径含有一个隐式前缀`m5out/`
   ```bash
-  build/RISCV/gem5.opt \
+  $ build/RISCV/gem5.opt \
     --debug-flags=ExecEnable,ExecUser,ExecKernel \
     --debug-file=debug.log.gz \
     configs/example/se.py \
@@ -102,7 +102,7 @@
 * 若我们并不关心每条动态指令，只是想知道整个程序最终的运行情况，可以用gem5的性能计数器功能
 * gem5的性能计数器默认是开启的，例如运行下面的命令
   ```bash
-  build/RISCV/gem5.opt configs/example/se.py \
+  $ build/RISCV/gem5.opt configs/example/se.py \
     --cpu-type=O3CPU \
     --bp-type=TAGE_SC_L_64KB \
     --caches --l2cache \
@@ -266,14 +266,16 @@
   /root/m5 dumpstats
   ```
 * <b>警告：</b>gem5的磁盘镜像是只读的，所以如果你的benchmark需要写，请将写的内容重定向到镜像的`/tmp`文件夹中
+* <b>注：</b>镜像里虽然有C库，但由于Linux的库更新很快，镜像的C库已经有点过时了，所以建议benchmark都用`-static`编译
 
 ### 使用Atomic启动Linux
-* 为了避免每次运行程序都要启动一次系统，我们可以制作一个已经启动好的系统的镜像，以后每次都从创建镜像的地方开始运行benchmark即可
+* 为了避免每次运行程序都要启动一次系统，我们可以制作一个已经启动好的系统的镜像，以后每次都从创建镜像的地方开始运行benchmark
 * 由于上一步我们已经在登录脚本中设置了checkpoint命令，所以直接启动系统即可，启动完成后会自动保存镜像并退出
   ```bash
-  build/RISCV/gem5.opt configs/example/riscv/fs_linux.py \
-    --kernel=riscv-fs/bootloader-vmlinux-5.10 \
-    --disk-image=riscv-fs/riscv-disk.img
+  $ cd gem5
+  $ build/RISCV/gem5.opt configs/example/riscv/fs_linux.py \
+    --kernel=../bootloader-vmlinux-5.10 \
+    --disk-image=../riscv-disk.img
   ```
 * 生成的镜像位于`m5out/cpt.xxx/`（整个文件夹都是），其中`xxx`是创建checkpoint时的tick数
 * <b>注：</b>gem5不是用文件夹名称而是tick数的大小顺序来识别checkpoint的，tick数最小的为1号checkpoint，次小的为2号，以此类推，所以建议不要修改文件夹的名字
@@ -281,10 +283,10 @@
 ### 使用O3CPU恢复Checkpoint
 * 恢复1号checkpoint（假设你的`m5out/`下只有一个checkpoint），注意设置`--script`为我们刚才准备的`run-hello.sh`脚本
   ```bash
-  build/RISCV/gem5.opt \
+  $ build/RISCV/gem5.opt \
     configs/example/riscv/fs_linux.py \
-    --kernel=riscv-fs/bootloader-vmlinux-5.10 \
-    --disk-image=riscv-fs/riscv-disk.img \
+    --kernel=../bootloader-vmlinux-5.10 \
+    --disk-image=../riscv-disk.img \
     --restore-with-cpu=O3CPU \
     --bp-type=TAGE_SC_L_64KB \
     --caches --l2cache \
