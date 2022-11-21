@@ -1,6 +1,8 @@
 # gem5 Checkpoint原理与代码
 本文档基于gem5 v22.0.0.1版本
 
+gem5虽然提供了`se.py`脚本来“方便”地操作Checkpoint，但`se.py`包装得太好，导致用户不能很好地理解其中的原理，而且也很难修改它以实现自己的需求。为了从原理上学会操作gem5的Checkpoint，我写了这份文档。本文档的配套代码是[checkpoint.py](checkpoint.py)，这些代码基本上是仿照`se.py`实现的，确保了正确性，但没有做过多的包装，所以很好理解和修改。
+
 ## 创建Checkpoint
 * 创建Checkpoint很简单，只要调用在`m5.simulate()`返回后调用`m5.checkpoint(cpt_path)`即可，后者的原理为
   * 调用`drain()`：经由`DrainManager`调用所有`Drainable`对象的`drain()`函数（`Drainable`包括所有`SimObject`），使其达到一个适于保存的状态
@@ -37,7 +39,7 @@
   * 调用`getCheckpoint(ckpt_dir)`：构造一个`CheckpointIn`对象，用这个对象来读Checkpoint中的内容
   * 对于`root`下的所有对象，调用其`loadState(ckpt)`，进而调用`unserializeSection()`和`unserialize()`，将之前存入的键值对读出来并恢复
 * <b>警告：</b>Checkpoint并未记录`system`的结构，它只是把`system`中每个模块的内容记录了下来，所以在恢复Checkpoint之前必须保证`system`的结构已经配置成保存Checkpoint时的样子（包括连接、参数等），否则无法正确恢复
-* 运行样例
+* 运行样例，以恢复`ckpt.001`为例，其他的同理
   ```bash
   $ build/RISCV/gem5.opt checkpoint.py restore
   ```
@@ -79,3 +81,34 @@
   ```
 
 ## 创建SimPoint Checkpoint
+* SimPoint Checkpoint不是一种全新的Chekpoint，它只是在普通Checkpoint的基础上增加了对BBV的分析，所以它的创建方法也是在创建普通Checkpoint方法上的扩展
+* <b>注：</b>只有`AtomicSimpleCPU`支持SimPoint，显然`Atomic`是最适合用来创建SimPoint的CPU，所以gem5只在它上面提供了SimPoint接口
+* 创建SimPoint Checkpoint的大致步骤为
+  * 在初始化`system`前，调用CPU（必须是`Atomic`或其子类）的`addSimPointProbe()`函数，给CPU挂载一个`SimPoint`实例
+    * `SimPoint`是`ProbeListenerObject`的子类，它可以监听CPU的`Commit`阶段，用提交的指令计算BBV
+  * 首次运行程序，每执行intervalCount条指令，`SimPoint`就会输出一段BBV；首次运行程序的过程中只生成BBV，不生成Checkpoint
+  * 得到整个程序的BBV后，用SimPoint 3.2工具（需另外安装）分析，得到Weight
+  * 重新运行一次程序，在初始化`system`前，给CPU指定`simpoint_start_insts`，标记SimPoint的断点位置，在这些断点处生成SimPoint Checkpoint
+* <b>注：</b>也就是说，生成SimPoint Checkpoint需要运行一个程序两次
+  * 理论上也可以只运行一次，在生成BBV的同时以相同的`interval`创建Checkpoint；不过既然`se.py`用的是两次的方案，可能也是有它的考虑
+  * 我觉得一个好处可能是第一次生成BBV的时候可以用`Atomic`，第二次生成Checkpoint的时候可以用`O3`，于是也可以保存Cache内容
+  * <b>警告：</b>这两次必须设置相同的`interval`，否则两次的切片对不上
+* 生成SimPoint BBV样例
+  ```bash
+  $ build/RISCV/gem5.opt checkpoint.py simpoint_profile
+  ```
+* 要生成Weight，请先自行安装[SimPoint 3.2](https://cseweb.ucsd.edu/~calder/simpoint/simpoint-3-0.htm)，然后运行以下命令（`-maxK 5`意思是最多生成5个SimPoint）
+  ```bash
+  $ /path/to/simpoint -maxK 5 \
+    -loadFVFile m5out/simpoint.bb.gz -inputVectorsGzipped \
+    -saveSimpoints m5out/simpoints.txt \
+    -saveSimpointWeights m5out/weights.txt
+  ```
+* 生成SimPoint Checkpoint样例，我按从`cpkt.001`开始递增地给Checkpoint命名，你也可以改成自己的命名方式
+  ```bash
+  $ build/RISCV/gem5.opt checkpoint.py take_simpoint_checkpoints
+  ```
+* 恢复SimPoint Checkpoint样例，这里仅恢复`ckpt.001`，其他的同理；和一般的恢复不同的是，SimPoint只是运行一个区间，不会运行到结束，所以要设定一个指令数上限；我们可以继续用`simpoint_start_insts`置warmup指令数和总指令数（虽然名字不是这个意思）
+  ```bash
+  $ build/RISCV/gem5.opt checkpoint.py restore_simpoint
+  ```

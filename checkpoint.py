@@ -21,7 +21,10 @@ parser.add_argument('action', choices=[
     'create_by_fixed_insts',
     'restore',
     'restore_and_switch',
-    'switch_repeatedly'])
+    'switch_repeatedly',
+    'simpoint_profile',
+    'take_simpoint_checkpoints',
+    'restore_simpoint'])
 args = parser.parse_args()
 action = args.action
 
@@ -144,6 +147,11 @@ process.cmd = [binary]
 system.cpu.workload = process
 system.cpu.createThreads()
 
+
+#######################################
+#         System Instantiation        #
+#######################################
+
 # Before system instantiation, add an O3CPU as switch_cpu to system if we
 # will switch. It should copy key settings from the original cpu
 if 'switch' in action:
@@ -165,13 +173,50 @@ if 'restore' in action:
         print("You haven't create any checkpoint yet! Abort")
         exit(-1)
 
+simpoint_interval = 3000
+
+# Add SimPoint probe to cpu if we will profile for SimPoint
+if action == 'simpoint_profile':
+    system.cpu.addSimPointProbe(simpoint_interval)
+
+# Add breakpoints if we will create SimPoint checkpoints
+if action == 'take_simpoint_checkpoints':
+    try:
+        with open('m5out/simpoints.txt') as f:
+            ss = f.readlines()
+        with open('m5out/weights.txt') as f:
+            ws = f.readlines()
+    except FileNotFoundError:
+        print("Either 'm5out/simpoints.txt' or 'm5out/weights.txt' not found")
+        exit(-1)
+
+    # Read simpoints and weights
+    print('Read simpoints and weights')
+    simpoints = []
+    for sl, wl in zip(ss, ws):
+        s = int(sl.split()[0])
+        w = float(wl.split()[0])
+        simpoints.append((s, w))
+
+    # Compute start insts
+    simpoints.sort()
+    simpoint_start_insts = []
+    for s, _ in simpoints:
+        insts = s * simpoint_interval
+        simpoint_start_insts.append(insts)
+    system.cpu.simpoint_start_insts = simpoint_start_insts
+
+# Add breakpoints if we will restore SimPoint checkpoints
+if action == 'restore_simpoint':
+    system.cpu.simpoint_start_insts = [simpoint_interval]
+
 # Instantiate system
 root = Root(full_system=False, system=system)
 if ckpt_dir is None:
     print('Instantiate')
     m5.instantiate()
 else:
-    print('Restore from checkpoint')
+    print('Restore checkpoint', repr(ckpt_dir))
     m5.instantiate(ckpt_dir)
 
 
@@ -244,6 +289,31 @@ elif action == 'switch_repeatedly':
         print('Pause @ tick', m5.curTick())
         print('Switch %s -> %s' % (switch_cpu_list[0]))
         m5.switchCpus(system, switch_cpu_list)
+
+        # Reverse each CPU pair in switch_cpu_list
         switch_cpu_list = [(p[1], p[0]) for p in switch_cpu_list]
+
+elif action == 'simpoint_profile':
+    print('Simulate and profile for SimPoint')
+    exit_event = m5.simulate()
+
+elif action == 'take_simpoint_checkpoints':
+    for i, (s, w) in enumerate(simpoints, 1):
+        print('Simulate until next simpoint entry')
+        exit_event = m5.simulate()
+
+        if exit_event.getCause() == 'simpoint starting point found':
+            print('Take simpoint %d @ tick %d' % (s, m5.curTick()))
+            ckpt_dir = os.path.join(m5out, 'ckpt.%03d' % i)
+            m5.checkpoint(ckpt_dir)
+            with open(os.path.join(ckpt_dir, 'weight.txt'), 'w') as f:
+                f.write(str(w))
+
+    print('Simulate to end')
+    exit_event = m5.simulate()
+
+elif action == 'restore_simpoint':
+    print('Simulate simpoint for %d insts' % simpoint_interval)
+    exit_event = m5.simulate()
 
 print('Exiting @ tick %d because %s' % (m5.curTick(), exit_event.getCause()))
